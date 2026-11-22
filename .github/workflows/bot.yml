@@ -3,7 +3,7 @@ name: Bot de ofertas Shopee
 on:
   schedule:
     # roda 2 vezes por hora; o bot sorteia se posta ou não (veja PROBABILIDADE)
-    - cron: "5,35 * * * *"
+    - cron: "*/15 11-23,0 * * *"
   workflow_dispatch:
     inputs:
       comando:
