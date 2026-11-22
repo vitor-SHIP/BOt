@@ -2,47 +2,59 @@ name: Bot de ofertas Shopee
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/5 11-23,0 * * *"
   workflow_dispatch:
+    inputs:
+      comando:
+        description: "ofertas = só mostra | teste = posta 1 agora | uma = rodada normal"
+        default: "ofertas"
+        type: choice
+        options:
+          - ofertas
+          - teste
+          - uma
 
 permissions:
   contents: write
 
 concurrency:
-  group: bot-shopee
+  group: bot-ofertas
   cancel-in-progress: false
 
 jobs:
-  bot:
+  postar:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 5
     steps:
-      - name: Baixar o repositório
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: "3.12"
 
-      # Mantenha aqui os passos existentes do bot.
-      # Exemplo:
-      # - name: Executar bot
-      #   run: python main.py
-      #   env:
-      #     PROBABILIDADE: "1"
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
 
-      - name: Atualizar lista e enviar alterações
+      - name: Rodar o bot
+        env:
+          SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
+          SHOPEE_APP_SECRET: ${{ secrets.SHOPEE_APP_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CANAL: ${{ secrets.CANAL }}
+          PALAVRAS: "fone bluetooth,smartwatch,carregador turbo,caixa de som bluetooth,fone de ouvido sem fio,capinha celular,cabo usb tipo c,lanterna led,organizador cozinha,luminária led,mochila,tênis masculino,relógio digital,garrafa térmica,kit maquiagem,ventilador portátil"
+          DESCONTO_MIN: "30"
+          VENDAS_MIN: "100"
+          AVALIACAO_MIN: "4.5"
+          ORDENAR: "2"
+          HORA_INICIO: "8"
+          HORA_FIM: "22"
+          PROBABILIDADE: "1"
+        run: python bot_auto.py ${{ github.event.inputs.comando || 'uma' }}
+
+      - name: Salvar lista de produtos já postados
+        if: always()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git fetch origin main
-          git rebase origin/main || {
-            echo "Conflito ao sincronizar; o rebase foi cancelado."
-            git rebase --abort
-            exit 1
-          }
-
-          git add .
-          git diff --cached --quiet && echo "Nenhuma alteração" || {
-            git commit -m "Atualiza lista de postados"
-            git push origin main
-          }
+          git config user.name "bot-ofertas"
+          git config user.email "bot-ofertas@users.noreply.github.com"
+          git add postados.json
+          git diff --cached --quiet || (git commit -m "atualiza lista de postados" && git push)
