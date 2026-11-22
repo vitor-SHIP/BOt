@@ -2,7 +2,6 @@ name: Bot de ofertas Shopee
 
 on:
   schedule:
-    # roda 2 vezes por hora; o bot sorteia se posta ou não (veja PROBABILIDADE)
     - cron: "*/5 11-23,0 * * *"
   workflow_dispatch:
     inputs:
@@ -38,13 +37,11 @@ jobs:
 
       - name: Rodar o bot
         env:
-          # Segredos (cadastrados em Settings > Secrets and variables > Actions)
           SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
           SHOPEE_APP_SECRET: ${{ secrets.SHOPEE_APP_SECRET }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CANAL: ${{ secrets.CANAL }}
-          # Ajustes (pode editar aqui mesmo)
-          PALAVRAS: "fone bluetooth,smartwatch,carregador turbo,caixa de som bluetooth"
+          PALAVRAS: "fone bluetooth,smartwatch,carregador turbo,caixa de som bluetooth,fone de ouvido sem fio,capinha celular,cabo usb tipo c,lanterna led,organizador cozinha,luminária led,mochila,tênis masculino,relógio digital,garrafa térmica,kit maquiagem,ventilador portátil"
           DESCONTO_MIN: "30"
           VENDAS_MIN: "100"
           AVALIACAO_MIN: "4.5"
