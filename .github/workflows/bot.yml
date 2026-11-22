@@ -51,7 +51,7 @@ jobs:
           ORDENAR: "2"
           HORA_INICIO: "8"
           HORA_FIM: "22"
-          PROBABILIDADE: "0.5"
+          PROBABILIDADE: "1"
         run: python bot_auto.py ${{ github.event.inputs.comando || 'uma' }}
 
       - name: Salvar lista de produtos já postados
