@@ -1,237 +1,79 @@
-uto · PY
-"""
-Bot de ofertas Shopee -> Telegram
- 
-Uso:
-    python bot_auto.py ofertas   # só mostra as ofertas encontradas (não posta)
-    python bot_auto.py teste     # posta 1 oferta agora (ignora horário e probabilidade)
-    python bot_auto.py uma       # rodada normal (respeita horário e probabilidade)
-"""
-import hashlib
-import html
-import json
-import os
-import random
-import sys
-import time
-from datetime import datetime
-from pathlib import Path
-from zoneinfo import ZoneInfo
- 
-import requests
- 
-# ---------- Configuração (vem das variáveis de ambiente do workflow) ----------
-APP_ID = os.environ.get("SHOPEE_APP_ID", "")
-APP_SECRET = os.environ.get("SHOPEE_APP_SECRET", "")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-CANAL = os.environ.get("CANAL", "")
- 
-PALAVRAS = [p.strip() for p in os.environ.get("PALAVRAS", "").split(",") if p.strip()]
-DESCONTO_MIN = float(os.environ.get("DESCONTO_MIN", "30"))
-VENDAS_MIN = int(os.environ.get("VENDAS_MIN", "100"))
-AVALIACAO_MIN = float(os.environ.get("AVALIACAO_MIN", "4.5"))
-# 1=relevância, 2=mais vendidos, 3=maior preço, 4=menor preço, 5=maior comissão
-ORDENAR = int(os.environ.get("ORDENAR", "2"))
-HORA_INICIO = int(os.environ.get("HORA_INICIO", "8"))
-HORA_FIM = int(os.environ.get("HORA_FIM", "22"))
-PROBABILIDADE = float(os.environ.get("PROBABILIDADE", "1"))
- 
-FUSO = ZoneInfo("America/Sao_Paulo")
-API_URL = "https://open-api.affiliate.shopee.com.br/graphql"
-ARQUIVO_POSTADOS = Path("postados.json")
-MAX_POSTADOS = 3000        # tamanho máximo do histórico
-PALAVRAS_POR_RODADA = 4    # quantas palavras buscar por execução (evita estourar o timeout)
- 
-QUERY = """
-query ($keyword: String!, $sortType: Int!, $limit: Int!) {
-  productOfferV2(keyword: $keyword, sortType: $sortType, page: 1, limit: $limit) {
-    nodes {
-      itemId
-      productName
-      price
-      priceMin
-      priceMax
-      priceDiscountRate
-      sales
-      ratingStar
-      imageUrl
-      shopName
-      offerLink
-      productLink
-    }
-  }
-}
-"""
- 
- 
-# ---------- Histórico de postados ----------
-def carregar_postados() -> list:
-    try:
-        return json.loads(ARQUIVO_POSTADOS.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
- 
- 
-def salvar_postados(lista: list) -> None:
-    ARQUIVO_POSTADOS.write_text(
-        json.dumps(lista[-MAX_POSTADOS:], ensure_ascii=False, indent=1),
-        encoding="utf-8",
-    )
- 
- 
-# ---------- Shopee ----------
-def chamar_shopee(keyword: str) -> list:
-    payload = json.dumps(
-        {
-            "query": QUERY,
-            "variables": {"keyword": keyword, "sortType": ORDENAR, "limit": 20},
-        },
-        separators=(",", ":"),
-    )
-    ts = str(int(time.time()))
-    assinatura = hashlib.sha256((APP_ID + ts + payload + APP_SECRET).encode()).hexdigest()
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"SHA256 Credential={APP_ID}, Timestamp={ts}, Signature={assinatura}",
-    }
-    resp = requests.post(API_URL, data=payload, headers=headers, timeout=20)
-    resp.raise_for_status()
-    dados = resp.json()
-    if dados.get("errors"):
-        raise RuntimeError(f"Erro da API Shopee: {dados['errors']}")
-    return dados["data"]["productOfferV2"]["nodes"] or []
- 
- 
-def para_float(valor, padrao=0.0) -> float:
-    try:
-        return float(valor)
-    except (TypeError, ValueError):
-        return padrao
- 
- 
-def passa_nos_filtros(p: dict) -> bool:
-    return (
-        para_float(p.get("priceDiscountRate")) >= DESCONTO_MIN
-        and int(para_float(p.get("sales"))) >= VENDAS_MIN
-        and para_float(p.get("ratingStar")) >= AVALIACAO_MIN
-        and bool(p.get("offerLink"))
-    )
- 
- 
-def buscar_ofertas(ja_postados: set) -> list:
-    """Busca em algumas palavras sorteadas e devolve as ofertas novas que passam nos filtros."""
-    palavras = PALAVRAS[:]
-    random.shuffle(palavras)
-    achadas, vistos = [], set()
- 
-    for palavra in palavras[:PALAVRAS_POR_RODADA]:
-        try:
-            produtos = chamar_shopee(palavra)
-        except Exception as e:
-            print(f"[aviso] falha ao buscar '{palavra}': {e}")
-            continue
-        for p in produtos:
-            pid = str(p.get("itemId"))
-            if pid in ja_postados or pid in vistos or not passa_nos_filtros(p):
-                continue
-            vistos.add(pid)
-            p["_palavra"] = palavra
-            achadas.append(p)
-        time.sleep(1)  # respeita o limite de requisições da API
- 
-    random.shuffle(achadas)
-    return achadas
- 
- 
-# ---------- Telegram ----------
-def brl(valor) -> str:
-    v = para_float(valor)
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
- 
- 
-def montar_legenda(p: dict) -> str:
-    nome = html.escape(p["productName"][:120])
-    desconto = int(para_float(p.get("priceDiscountRate")))
-    preco = para_float(p.get("priceMin")) or para_float(p.get("price"))
-    # Preço original estimado a partir do desconto (a API não devolve o preço "de")
-    original = preco / (1 - desconto / 100) if 0 < desconto < 100 and preco else 0
-    linhas = [f"🔥 <b>{nome}</b>", ""]
-    if original:
-        linhas.append(f"❌ De: <s>{brl(original)}</s>")
-    linhas.append(f"✅ Por: <b>{brl(preco)}</b> ({desconto}% OFF)")
-    linhas.append(f"⭐ {para_float(p.get('ratingStar')):.1f} | 🛒 {int(para_float(p.get('sales')))} vendidos")
-    linhas.append("")
-    linhas.append(f'👉 <a href="{html.escape(p["offerLink"])}">Comprar na Shopee</a>')
-    return "\n".join(linhas)
- 
- 
-def postar_telegram(p: dict) -> None:
-    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-    legenda = montar_legenda(p)
-    if p.get("imageUrl"):
-        r = requests.post(
-            f"{base}/sendPhoto",
-            data={"chat_id": CANAL, "photo": p["imageUrl"], "caption": legenda, "parse_mode": "HTML"},
-            timeout=20,
-        )
-        if r.ok:
-            return
-        print(f"[aviso] sendPhoto falhou ({r.status_code}), tentando só texto...")
-    r = requests.post(
-        f"{base}/sendMessage",
-        data={"chat_id": CANAL, "text": legenda, "parse_mode": "HTML"},
-        timeout=20,
-    )
-    r.raise_for_status()
- 
- 
-# ---------- Fluxo principal ----------
-def main() -> int:
-    comando = sys.argv[1] if len(sys.argv) > 1 else "uma"
- 
-    faltando = [n for n, v in [("SHOPEE_APP_ID", APP_ID), ("SHOPEE_APP_SECRET", APP_SECRET)] if not v]
-    if comando != "ofertas":
-        faltando += [n for n, v in [("TELEGRAM_TOKEN", TELEGRAM_TOKEN), ("CANAL", CANAL)] if not v]
-    if faltando:
-        print(f"[erro] variáveis ausentes: {', '.join(faltando)}")
-        return 1
-    if not PALAVRAS:
-        print("[erro] variável PALAVRAS está vazia")
-        return 1
- 
-    agora = datetime.now(FUSO)
-    if comando == "uma":
-        if not (HORA_INICIO <= agora.hour < HORA_FIM):
-            print(f"Fora do horário ({agora:%H:%M} BRT). Nada a fazer.")
-            return 0
-        if random.random() > PROBABILIDADE:
-            print("Sorteio decidiu não postar nesta rodada.")
-            return 0
- 
-    historico = carregar_postados()
-    ofertas = buscar_ofertas(set(historico))
-    print(f"{len(ofertas)} oferta(s) nova(s) passaram nos filtros.")
- 
-    if comando == "ofertas":
-        for p in ofertas[:15]:
-            print(
-                f"- {p['productName'][:60]} | {int(para_float(p['priceDiscountRate']))}% OFF | "
-                f"{p['sales']} vendas | nota {p['ratingStar']} | [{p['_palavra']}]"
-            )
-        return 0
- 
-    if not ofertas:
-        print("Nenhuma oferta nova encontrada.")
-        return 0
- 
-    escolhida = ofertas[0]
-    postar_telegram(escolhida)
-    historico.append(str(escolhida["itemId"]))
-    salvar_postados(historico)
-    print(f"Postado: {escolhida['productName'][:80]}")
-    return 0
- 
- 
-if __name__ == "__main__":
-    sys.exit(main())
- 
+name: Bot de ofertas Shopee
+
+on:
+  schedule:
+    # UTC 11:00-00:55 = 08:00-21:55 no horário de Brasília (combina com HORA_INICIO/HORA_FIM)
+    - cron: "*/5 11-23,0 * * *"
+  workflow_dispatch:
+    inputs:
+      comando:
+        description: "ofertas = só mostra | teste = posta 1 agora | uma = rodada normal"
+        default: "ofertas"
+        type: choice
+        options:
+          - ofertas
+          - teste
+          - uma
+
+permissions:
+  contents: write
+
+# Nunca roda duas execuções ao mesmo tempo (evita conflito no postados.json)
+concurrency:
+  group: bot-ofertas
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: America/Sao_Paulo
+
+jobs:
+  postar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip            # acelera as próximas execuções
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Rodar o bot
+        env:
+          SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
+          SHOPEE_APP_SECRET: ${{ secrets.SHOPEE_APP_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CANAL: ${{ secrets.CANAL }}
+          PALAVRAS: "fone bluetooth,smartwatch,carregador turbo,caixa de som bluetooth,fone de ouvido sem fio,capinha celular,cabo usb tipo c,lanterna led,organizador cozinha,luminária led,mochila,tênis masculino,relógio digital,garrafa térmica,kit maquiagem,ventilador portátil"
+          DESCONTO_MIN: "30"
+          VENDAS_MIN: "100"
+          AVALIACAO_MIN: "4.5"
+          ORDENAR: "2"
+          HORA_INICIO: "8"
+          HORA_FIM: "22"
+          PROBABILIDADE: "1"
+        run: python bot_auto.py "${{ github.event.inputs.comando || 'uma' }}"
+
+      - name: Salvar lista de produtos já postados
+        # Só commita se o bot realmente alterou o arquivo (e nunca no modo "ofertas")
+        if: always() && github.event.inputs.comando != 'ofertas'
+        run: |
+          if [ -f postados.json ] && ! git diff --quiet -- postados.json; then
+            git config user.name "bot-ofertas"
+            git config user.email "bot-ofertas@users.noreply.github.com"
+            git add postados.json
+            git commit -m "atualiza lista de postados [skip ci]"
+            # tenta até 3 vezes caso outro push tenha acontecido no meio
+            for i in 1 2 3; do
+              git pull --rebase origin "${GITHUB_REF_NAME}" && git push && break
+              sleep 3
+            done
+          else
+            echo "postados.json sem mudanças, nada a commitar."
+          fi
