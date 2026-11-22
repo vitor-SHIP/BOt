@@ -3,7 +3,7 @@ name: Bot de ofertas Shopee
 on:
   schedule:
     # UTC 11:00-00:55 = 08:00-21:55 no horário de Brasília (combina com HORA_INICIO/HORA_FIM)
-    - cron: "*/5 11-23,0 * * *"
+    - cron: "2-59/5 11-23,0 * * *"
   workflow_dispatch:
     inputs:
       comando:
